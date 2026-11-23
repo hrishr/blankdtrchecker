@@ -12,7 +12,7 @@ main{max-width:1000px;margin:0 auto;padding:20px 16px 60px}
 h1{font-size:22px;margin:0 0 4px}p.sub{margin:0 0 16px;color:var(--mut)}
 #drop{border:2px dashed var(--bd);background:var(--card);border-radius:14px;padding:28px 16px;text-align:center;cursor:pointer}
 #drop.over{border-color:var(--ac)}#drop b{color:var(--ac)}#drop small{display:block;color:var(--mut);margin-top:6px}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:18px 0 10px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:18px 0 10px}
 .stat{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;text-align:center}
 .stat b{display:block;font-size:22px}.stat span{font-size:12px;color:var(--mut)}
 .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
@@ -36,8 +36,8 @@ label{font-size:13px;display:flex;gap:6px;align-items:center;cursor:pointer}
 @media print{main,.ov{display:none!important}body{background:#fff}#pa{display:block}#pa img{display:block;width:100%;max-height:100vh;object-fit:contain;page-break-after:always}}
 </style></head><body>
 <main>
-<h1>DTR Checker</h1>
-<p class="sub">Upload a PDF of DTRs. Blank pages and pages with no time-in are unchecked so you can leave them out when printing.</p>
+<h1>DTR Checker <small style="font-size:12px;color:var(--mut);font-weight:400">v4 · blank or with entries</small></h1>
+<p class="sub">Upload a PDF of DTRs. Blank DTRs (no times written at all) are unchecked so you can leave them out when printing.</p>
 <div id="drop"><b>Click to upload</b> or drop a PDF here<small>Each page is checked as one DTR (both copies on the page are the same)</small>
 <input id="f" type="file" accept=".pdf" hidden></div>
 <div id="out"></div>
@@ -47,7 +47,7 @@ label{font-size:13px;display:flex;gap:6px;align-items:center;cursor:pointer}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-const TM=/^\d{1,2}:\d{2}\s*[AP]$/i,$=id=>document.getElementById(id);
+const TM=/\d:\d{2}/,$=id=>document.getElementById(id);
 let buf,pdf,pages=[],filter='all',fname='dtr';
 const drop=$('drop'),inp=$('f'),out=$('out');
 drop.onclick=()=>inp.click();
@@ -58,19 +58,12 @@ inp.onchange=()=>{if(inp.files[0])load(inp.files[0])};
 function analyze(items,w){
   if(!items.length)return{status:'scan',name:'',detail:'No readable text. This page may be a scan.'};
   const L=items.filter(i=>i.x<w/2);
-  const times=L.filter(i=>TM.test(i.s));
+  const times=items.filter(i=>TM.test(i.s));
   let name='';const nm=L.find(i=>/^\(?name\)?$/i.test(i.s));
   if(nm)name=L.filter(i=>i.y>nm.y+2&&i.y<nm.y+22).sort((a,b)=>a.x-b.x).map(i=>i.s).join(' ');
-  if(!times.length)return{status:'blank',name,detail:'Blank: no time entries.'};
-  const hdr=L.filter(i=>/^(IN|OUT)$/i.test(i.s));let cols=[];
-  if(hdr.length){const hy=Math.max(...hdr.map(i=>i.y));cols=hdr.filter(i=>Math.abs(i.y-hy)<4).sort((a,b)=>a.x-b.x)}
-  const rows=new Set();
-  times.forEach(t=>{
-    if(cols.length===6){const k=cols.map((c,j)=>[Math.abs(c.x-t.x),j]).sort((a,b)=>a[0]-b[0])[0][1];if(k===0||k===2)rows.add(Math.round(t.y/4))}
-    else rows.add(Math.round(t.y/4));
-  });
-  if(!rows.size)return{status:'noin',name,detail:'Has times but no time-in on any day.'};
-  return{status:'ok',name,detail:rows.size+' day'+(rows.size>1?'s':'')+' with time-in.'};
+  if(!times.length&&!TM.test(items.map(i=>i.s).join('')))return{status:'blank',name,detail:'Blank: no time entries.'};
+  const rows=new Set(times.map(t=>Math.round(t.y/4)));
+  return{status:'ok',name,detail:rows.size?rows.size+' day'+(rows.size>1?'s':'')+' with entries.':'Has time entries.'};
 }
 async function load(file){
   fname=file.name.replace(/\.pdf$/i,'');
@@ -93,12 +86,12 @@ async function load(file){
   }
   render();
 }
-const LBL={ok:'Has time-in',blank:'Blank',noin:'No time-in',scan:'Unreadable'};
+const LBL={ok:'Has entries',blank:'Blank',scan:'Unreadable'};
 function render(){
   const c=s=>pages.filter(p=>p.status===s).length,sel=pages.filter(p=>p.inc).length;
-  out.innerHTML=`<div class="stats"><div class="stat"><b>${pages.length}</b><span>Pages</span></div><div class="stat"><b>${c('blank')}</b><span>Blank</span></div><div class="stat"><b>${c('noin')}</b><span>No time-in</span></div><div class="stat"><b>${c('ok')}</b><span>Has time-in</span></div></div>
-  <div class="bar tabs">${[['all','All'],['blank','Blank'],['noin','No time-in'],['ok','Has time-in']].map(([k,l])=>`<button class="${filter===k?'on':''}" data-k="${k}">${l}</button>`).join('')}<span class="sp"></span>
-  <button id="ck">Select all with time-in</button></div>
+  out.innerHTML=`<div class="stats"><div class="stat"><b>${pages.length}</b><span>Pages</span></div><div class="stat"><b>${c('blank')}</b><span>Blank</span></div><div class="stat"><b>${c('ok')}</b><span>With entries</span></div></div>
+  <div class="bar tabs">${[['all','All'],['blank','Blank'],['ok','With entries']].map(([k,l])=>`<button class="${filter===k?'on':''}" data-k="${k}">${l}</button>`).join('')}<span class="sp"></span>
+  <button id="ck">Select all non-blank</button></div>
   <div class="bar"><b>${sel} of ${pages.length} pages selected</b><span class="sp"></span><button id="dl" class="pri">Download PDF (selected)</button><button id="pr" class="pri">Print selected</button></div>
   <div class="grid" id="g"></div>`;
   const g=$('g');
