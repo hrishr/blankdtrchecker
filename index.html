@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DTR Checker</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1c2430;--mut:#6b7686;--bd:#dde2e9;--ac:#2557d6;--red:#c0392b;--redbg:#fdecea;--amb:#a66300;--ambbg:#fff3dc;--grn:#1e7e4a;--grnbg:#e3f5ea;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14181f;--card:#1d232d;--tx:#e8ecf2;--mut:#9aa5b5;--bd:#303846;--ac:#6b93ff;--red:#ff8a7a;--redbg:#3a1f1c;--amb:#f3b04f;--ambbg:#3a2d14;--grn:#6fd49a;--grnbg:#16301f}}
+:root[data-theme="dark"]{--bg:#14181f;--card:#1d232d;--tx:#e8ecf2;--mut:#9aa5b5;--bd:#303846;--ac:#6b93ff;--red:#ff8a7a;--redbg:#3a1f1c;--amb:#f3b04f;--ambbg:#3a2d14;--grn:#6fd49a;--grnbg:#16301f}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:820px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;margin:0 0 4px}p.sub{margin:0 0 16px;color:var(--mut)}
+#drop{border:2px dashed var(--bd);background:var(--card);border-radius:14px;padding:32px 16px;text-align:center;cursor:pointer}
+#drop.over{border-color:var(--ac)}#drop b{color:var(--ac)}
+#drop small{display:block;color:var(--mut);margin-top:6px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:18px 0 10px}
+.stat{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;text-align:center}
+.stat b{display:block;font-size:22px}.stat span{font-size:12px;color:var(--mut)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.tabs button{border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:999px;padding:5px 12px;cursor:pointer;font:inherit;font-size:13px}
+.tabs button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.row{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px 12px;margin:8px 0;display:flex;gap:10px;justify-content:space-between;align-items:center}
+.row .n{font-weight:600;word-break:break-word}.row .d{font-size:13px;color:var(--mut)}
+.tag{flex:none;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px}
+.blank{background:var(--redbg);color:var(--red)}.noin{background:var(--ambbg);color:var(--amb)}.ok{background:var(--grnbg);color:var(--grn)}
+.act{margin:10px 0}.act button{border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:8px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+@media(max-width:520px){.stats{grid-template-columns:repeat(2,1fr)}}
+</style></head><body><main>
+<h1>DTR Checker</h1>
+<p class="sub">Upload DTR files and see which ones are blank or have no time-in. Files stay in your browser.</p>
+<div id="drop"><b>Click to upload</b> or drop files here
+<small>PDF (one DTR per page) · also Excel or CSV · several files at once<br>PDFs must have selectable text; scanned images can’t be read</small>
+<input id="f" type="file" multiple accept=".pdf,.xlsx,.xls,.csv" hidden></div>
+<div id="out"></div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+const T=/\b([01]?\d|2[0-3])\s*[:.;]\s*[0-5]\d(\s*[ap]\.?m\.?)?|\b\d{1,2}\s*[ap]\.?m\.?\b/i;
+const IN=/arrival|time[\s-]*in|\bin\b|a\.?m\.?\s*in|p\.?m\.?\s*in/i;
+let results=[],filter='all';
+const drop=document.getElementById('drop'),inp=document.getElementById('f');
+drop.onclick=()=>inp.click();
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('over')};
+drop.ondragleave=()=>drop.classList.remove('over');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');run(e.dataTransfer.files)};
+inp.onchange=()=>run(inp.files);
+async function run(files){
+  document.getElementById('out').innerHTML='<p class="sub">Reading files…</p>';
+  results=[];
+  for(const file of files){
+    try{
+      if(/\.pdf$/i.test(file.name)){(await checkPdf(file)).forEach(r=>results.push(r));continue}
+      const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
+      wb.SheetNames.forEach(sn=>results.push(check(file.name,sn,wb.SheetNames.length>1,XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:false,defval:''}))));
+    }catch(e){results.push({file:file.name,status:'err',detail:'Could not read this file. Use .xlsx, .xls or .csv.'})}
+  }
+  render();
+}
+function check(file,sn,multi,rows){
+  const label=multi?file+' › '+sn:file;
+  let name='';
+  for(const r of rows.slice(0,12)){const i=r.findIndex(c=>/^\s*name\b/i.test(String(c)));
+    if(i>-1){name=String(r[i]).replace(/^\s*name\s*[:\-]?\s*/i,'')||String(r.slice(i+1).find(c=>String(c).trim())||'');break}}
+  let times=0;rows.forEach(r=>r.forEach(c=>{if(T.test(String(c)))times++}));
+  if(!times)return{file:label,name,status:'blank',detail:'No time entries found at all.'};
+  let h=-1,cols=[];
+  for(let i=0;i<Math.min(rows.length,25);i++){const c=rows[i].map((x,j)=>IN.test(String(x))?j:-1).filter(j=>j>-1);if(c.length){h=i;cols=c;break}}
+  if(h<0)return{file:label,name,status:'ok',detail:times+' time entries found (could not locate arrival columns).'};
+  let days=0,filled=0,missing=[];
+  for(let i=h+1;i<rows.length;i++){const d=String(rows[i][0]).trim();
+    if(/^\d{1,2}$/.test(d)&&+d>=1&&+d<=31){days++;
+      if(cols.some(j=>T.test(String(rows[i][j]))))filled++;else missing.push(+d)}}
+  if(!days)return{file:label,name,status:'ok',detail:times+' time entries found.'};
+  if(!filled)return{file:label,name,status:'noin',detail:'No time-in on any of '+days+' day rows.'};
+  return{file:label,name,status:'ok',detail:filled+' of '+days+' days have a time-in'+(missing.length?' · none on day '+missing.join(', '):'')+'.'};
+}
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+async function checkPdf(file){
+  const out=[];let pdf;
+  try{pdf=await pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise}
+  catch(e){return[{file:file.name,status:'err',detail:'Could not open this PDF.'}]}
+  for(let p=1;p<=pdf.numPages;p++){
+    const label=pdf.numPages>1?file.name+' › page '+p:file.name;
+    try{
+      const tc=await(await pdf.getPage(p)).getTextContent();
+      const items=tc.items.filter(i=>i.str.trim()).map(i=>({s:i.str.trim(),x:i.transform[4]+i.width/2,y:i.transform[5]}));
+      if(!items.length){out.push({file:label,status:'err',detail:'No readable text. This page is probably a scan.'});continue}
+      out.push(checkItems(label,items));
+    }catch(e){out.push({file:label,status:'err',detail:'Could not read this page.'})}
+  }
+  return out;
+}
+function checkItems(label,items){
+  const lines=[];
+  items.sort((a,b)=>b.y-a.y||a.x-b.x);
+  items.forEach(it=>{const l=lines.find(l=>Math.abs(l.y-it.y)<4);l?l.it.push(it):lines.push({y:it.y,it:[it]})});
+  lines.sort((a,b)=>b.y-a.y);lines.forEach(l=>l.it.sort((a,b)=>a.x-b.x));
+  const txt=l=>l.it.map(i=>i.s).join(' ');
+  let name='';
+  for(let k=0;k<lines.length;k++){const t=txt(lines[k]);
+    if(/^\(?\s*name\s*\)?$/i.test(t)&&k>0){name=txt(lines[k-1]);break}
+    const m=t.match(/name\s*[:\-]?\s*(.+)/i);if(m&&m[1].trim().length>2){name=m[1].trim();break}}
+  name=name.slice(0,60);
+  const times=items.filter(i=>T.test(i.s)).length;
+  if(!times)return{file:label,name,status:'blank',detail:'No time entries found on this page.'};
+  const arr=items.filter(i=>/arrival/i.test(i.s));
+  const ax=arr.map(i=>i.x),hy=arr.length?Math.max(...arr.map(i=>i.y)):Infinity;
+  let days=0,filled=0,missing=[];const seen=new Set();
+  lines.forEach(l=>{if(l.y>=hy)return;const d=l.it[0].s;
+    if(!/^\d{1,2}$/.test(d)||+d<1||+d>31||seen.has(d))return;seen.add(d);days++;
+    const has=l.it.slice(1).some(i=>T.test(i.s)&&(!ax.length||ax.some(a=>Math.abs(i.x-a)<35)));
+    has?filled++:missing.push(+d)});
+  if(!days)return{file:label,name,status:'ok',detail:times+' time entries found (no day rows detected).'};
+  if(!filled)return{file:label,name,status:'noin',detail:'No time-in on any of '+days+' day rows.'};
+  return{file:label,name,status:'ok',detail:filled+' of '+days+' days have a time-in'+(missing.length?' · none on day '+missing.join(', '):'')+'.'};
+}
+function render(){
+  const c=s=>results.filter(r=>r.status===s).length;
+  const tags={blank:['Blank','blank'],noin:['No time-in','noin'],ok:['Has time-in','ok'],err:['Error','blank']};
+  const shown=results.filter(r=>filter==='all'||r.status===filter);
+  const esc=s=>String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  document.getElementById('out').innerHTML=
+   `<div class="stats"><div class="stat"><b>${results.length}</b><span>Checked</span></div><div class="stat"><b>${c('blank')}</b><span>Blank</span></div><div class="stat"><b>${c('noin')}</b><span>No time-in</span></div><div class="stat"><b>${c('ok')}</b><span>Has time-in</span></div></div>`+
+   `<div class="tabs">${[['all','All'],['blank','Blank'],['noin','No time-in'],['ok','Has time-in']].map(([k,l])=>`<button class="${filter===k?'on':''}" data-k="${k}">${l}</button>`).join('')}</div>`+
+   `<div class="act"><button id="csv">Download flagged list (CSV)</button></div>`+
+   (shown.map(r=>`<div class="row"><div><div class="n">${esc(r.name||r.file)}</div><div class="d">${r.name?esc(r.file)+' · ':''}${esc(r.detail)}</div></div><span class="tag ${tags[r.status][1]}">${tags[r.status][0]}</span></div>`).join('')||'<p class="sub">Nothing in this category.</p>');
+  document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{filter=b.dataset.k;render()});
+  document.getElementById('csv').onclick=()=>{
+    const q=s=>'"'+String(s).replace(/"/g,'""')+'"';
+    const rows=[['File','Name','Status','Detail'],...results.filter(r=>r.status!=='ok').map(r=>[r.file,r.name||'',tags[r.status][0],r.detail])];
+    const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(q).join(',')).join('\n')],{type:'text/csv'}));a.download='flagged-dtr.csv';a.click()};
+}
+</script></body></html>
